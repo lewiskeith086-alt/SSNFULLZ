@@ -1,7 +1,6 @@
 import { db } from "@/lib/db";
 import { getCurrentSession } from "@/lib/session";
 import { safeJson } from "@/lib/utils";
-import { buildStoredFileName, uploadBufferToR2 } from "@/lib/upload";
 
 export async function POST(req: Request) {
   const session = await getCurrentSession();
@@ -11,14 +10,15 @@ export async function POST(req: Request) {
 
   const form = await req.formData();
   const datasetId = String(form.get("datasetId") || "");
-  const file = form.get("file");
+  const storedPath = String(form.get("storedPath") || "");
+  const fileName = String(form.get("fileName") || "upload.csv");
 
   if (!datasetId) {
     return safeJson({ error: "Dataset is required" }, { status: 400 });
   }
 
-  if (!(file instanceof File)) {
-    return safeJson({ error: "CSV file is required" }, { status: 400 });
+  if (!storedPath) {
+    return safeJson({ error: "Missing storedPath" }, { status: 400 });
   }
 
   const dataset = await db.dataset.findUnique({ where: { id: datasetId } });
@@ -26,23 +26,13 @@ export async function POST(req: Request) {
     return safeJson({ error: "Dataset not found" }, { status: 404 });
   }
 
-  const fileBuffer = Buffer.from(await file.arrayBuffer());
-  const fileName = buildStoredFileName(file.name || "upload.csv");
-  const r2Key = `datasets/${datasetId}/${fileName}`;
-
   try {
-    const uploaded = await uploadBufferToR2({
-      key: r2Key,
-      body: fileBuffer,
-      contentType: file.type || "text/csv",
-    });
-
     const job = await db.importJob.create({
       data: {
         datasetId,
         uploadedById: session.sub,
-        fileName: file.name || "upload.csv",
-        storedPath: uploaded.storedPath,
+        fileName,
+        storedPath,
         status: "QUEUED",
       },
     });
@@ -51,10 +41,9 @@ export async function POST(req: Request) {
       ok: true,
       queued: true,
       jobId: job.id,
-      storedPath: uploaded.storedPath,
-      publicUrl: uploaded.publicUrl,
+      storedPath,
     });
-  } catch {
-    return safeJson({ error: "Upload failed" }, { status: 500 });
+  } catch (e: any) {
+    return safeJson({ error: e?.message || "Failed to queue job" }, { status: 500 });
   }
 }

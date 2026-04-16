@@ -1,4 +1,12 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import {
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  S3Client,
+  UploadPartCommand,
+} from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 function getRequiredEnv(name: string) {
   const value = process.env[name];
@@ -10,7 +18,7 @@ export function buildStoredFileName(name: string) {
   return `${Date.now()}_${name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
 }
 
-function getR2Client() {
+export function getR2Client() {
   const accountId = getRequiredEnv("R2_ACCOUNT_ID");
   const accessKeyId = getRequiredEnv("R2_ACCESS_KEY_ID");
   const secretAccessKey = getRequiredEnv("R2_SECRET_ACCESS_KEY");
@@ -25,12 +33,16 @@ function getR2Client() {
   });
 }
 
+export function getR2Bucket() {
+  return getRequiredEnv("R2_BUCKET_NAME");
+}
+
 export async function uploadBufferToR2(input: {
   key: string;
   body: Buffer;
   contentType?: string;
 }) {
-  const bucket = getRequiredEnv("R2_BUCKET_NAME");
+  const bucket = getR2Bucket();
   const client = getR2Client();
 
   await client.send(
@@ -53,6 +65,81 @@ export async function uploadBufferToR2(input: {
   };
 }
 
+export async function createMultipartUpload(input: {
+  key: string;
+  contentType?: string;
+}) {
+  const bucket = getR2Bucket();
+  const client = getR2Client();
+
+  const res = await client.send(
+    new CreateMultipartUploadCommand({
+      Bucket: bucket,
+      Key: input.key,
+      ContentType: input.contentType || "application/octet-stream",
+    })
+  );
+
+  if (!res.UploadId) {
+    throw new Error("Failed to create multipart upload");
+  }
+
+  return {
+    bucket,
+    key: input.key,
+    uploadId: res.UploadId,
+    storedPath: `r2://${bucket}/${input.key}`,
+  };
+}
+
+export async function getMultipartPartUploadUrl(input: {
+  key: string;
+  uploadId: string;
+  partNumber: number;
+}) {
+  const bucket = getR2Bucket();
+  const client = getR2Client();
+
+  const command = new UploadPartCommand({
+    Bucket: bucket,
+    Key: input.key,
+    UploadId: input.uploadId,
+    PartNumber: input.partNumber,
+  });
+
+  return getSignedUrl(client, command, { expiresIn: 60 * 60 });
+}
+
+export async function completeMultipartUpload(input: {
+  key: string;
+  uploadId: string;
+  parts: Array<{ ETag: string; PartNumber: number }>;
+}) {
+  const bucket = getR2Bucket();
+  const client = getR2Client();
+
+  await client.send(
+    new CompleteMultipartUploadCommand({
+      Bucket: bucket,
+      Key: input.key,
+      UploadId: input.uploadId,
+      MultipartUpload: {
+        Parts: input.parts.sort((a, b) => a.PartNumber - b.PartNumber),
+      },
+    })
+  );
+
+  const publicBaseUrl = process.env.R2_PUBLIC_BASE_URL?.trim();
+  const publicUrl = publicBaseUrl ? `${publicBaseUrl.replace(/\/$/, "")}/${input.key}` : null;
+
+  return {
+    bucket,
+    key: input.key,
+    publicUrl,
+    storedPath: publicUrl || `r2://${bucket}/${input.key}`,
+  };
+}
+
 export function parseStoredPath(storedPath: string) {
   if (!storedPath.startsWith("r2://")) {
     throw new Error(`Unsupported stored path: ${storedPath}`);
@@ -60,7 +147,7 @@ export function parseStoredPath(storedPath: string) {
 
   const withoutScheme = storedPath.slice(5);
   const slashIndex = withoutScheme.indexOf("/");
-  if (slashIndex === -1) throw new Error(`Invalid stored path: ${storedPath}`);
+  if (slashIndex == -1) throw new Error(`Invalid stored path: ${storedPath}`);
 
   return {
     bucket: withoutScheme.slice(0, slashIndex),
