@@ -29,6 +29,15 @@ function maskDigits(value?: string | null, visible = 4) {
   return `${"*".repeat(hiddenCount)}${trimmed.slice(-visible)}`;
 }
 
+function formatDob(value?: string | null) {
+  if (!value) return "—";
+  const digits = value.replace(/\D/g, "");
+  if (digits.length === 8) {
+    return `${digits.slice(0, 4)}-${digits.slice(4, 6)}-${digits.slice(6, 8)}`;
+  }
+  return value;
+}
+
 export default async function RecordsPage({
   searchParams,
 }: {
@@ -171,25 +180,24 @@ export default async function RecordsPage({
             <tr>
               <th>ID</th>
               <th>Name</th>
-              <th>Birth year</th>
+              <th>DOB</th>
               <th>Address</th>
               <th>City/State</th>
               <th>ZIP</th>
               <th>Phone</th>
               <th>SSN </th>
-              <th>Dataset</th>
             </tr>
           </thead>
           <tbody>
             {!hasSearch ? (
               <tr>
-                <td colSpan={9} className="muted">
+                <td colSpan={8} className="muted">
                   Enter search criteria to find matching records.
                 </td>
               </tr>
             ) : records.length === 0 ? (
               <tr>
-                <td colSpan={9} className="muted">
+                <td colSpan={8} className="muted">
                   No matching results found.
                 </td>
               </tr>
@@ -198,13 +206,12 @@ export default async function RecordsPage({
                 <tr key={r.id}>
                   <td>{r.externalId ?? "—"}</td>
                   <td>{[r.firstName, r.middleName, r.lastName].filter(Boolean).join(" ") || "—"}</td>
-                  <td>{r.birthYear ?? "—"}</td>
+                  <td>{formatDob(r.dateOfBirthRaw)}</td>
                   <td>{r.addressLine1 ?? "—"}</td>
                   <td>{[r.city, r.state].filter(Boolean).join(", ") || "—"}</td>
                   <td>{r.zipCode ?? "—"}</td>
                   <td>{r.phone ?? "—"}</td>
                   <td>{r.ssNumber ?? "—"}</td>
-                  <td>{r.dataset.name}</td>
                 </tr>
               ))
             )}
