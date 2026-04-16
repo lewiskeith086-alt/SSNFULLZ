@@ -86,7 +86,7 @@ async function processDataset(dataset: any) {
 
   await prisma.dataset.update({
     where: { id: dataset.id },
-    data: { status: "done" },
+    data: { status: "completed" },
   })
 }
 
