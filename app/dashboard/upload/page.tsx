@@ -149,7 +149,7 @@ export default function UploadPage() {
         setResumeAvailable(true);
       }
 
-      const uploadedPartNumbers = new Set(resume.parts.map((p) => p.PartNumber));
+      const uploadedPartNumbers = new Set((resume?.parts || []).map((p) => p.PartNumber));
 
       for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
         const start = (partNumber - 1) * PART_SIZE;
