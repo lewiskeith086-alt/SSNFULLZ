@@ -91,29 +91,39 @@ model Dataset {
 }
 
 model Record {
-  id           String   @id @default(cuid())
-  datasetId    String
-  firstName    String?
-  lastName     String?
-  birthYear    Int?
-  phone        String?
-  addressLine1 String?
-  city         String?
-  state        String?
-  zipCode      String?
-  sourceRow    Int?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id        String @id @default(cuid())
+  datasetId String
+
+  externalId     String?
+  firstName      String?
+  lastName       String?
+  middleName     String?
+  prefix         String?
+  dateOfBirthRaw String?
+  birthYear      Int?
+  addressLine1   String?
+  city           String?
+  county         String?
+  state          String?
+  zipCode        String?
+  phone          String?
+  ssNumber       String?
+
+  sourceRow Int?
+  rawJson   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   dataset Dataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
 
   @@index([datasetId])
+  @@index([externalId])
   @@index([firstName])
   @@index([lastName])
-  @@index([phone])
+  @@index([birthYear])
   @@index([city])
   @@index([state])
-  @@index([createdAt])
+  @@index([zipCode])
 }
 
 model ImportJob {

@@ -21,6 +21,14 @@ function contains(value?: string) {
   return value ? { contains: value, mode: "insensitive" as const } : undefined;
 }
 
+function maskDigits(value?: string | null, visible = 4) {
+  if (!value) return "—";
+  const trimmed = value.trim();
+  if (trimmed.length <= visible) return trimmed;
+  const hiddenCount = trimmed.length - visible;
+  return `${"*".repeat(hiddenCount)}${trimmed.slice(-visible)}`;
+}
+
 export default async function RecordsPage({
   searchParams,
 }: {
@@ -71,25 +79,21 @@ export default async function RecordsPage({
     AND: [
       params.firstName ? { firstName: contains(params.firstName) } : {},
       params.lastName ? { lastName: contains(params.lastName) } : {},
-      params.birthYear
-        ? { birthYear: Number(params.birthYear) || undefined }
-        : {},
+      params.birthYear ? { birthYear: Number(params.birthYear) || undefined } : {},
       params.phone ? { phone: contains(params.phone) } : {},
       params.city ? { city: contains(params.city) } : {},
       params.state ? { state: contains(params.state) } : {},
       params.zipCode ? { zipCode: contains(params.zipCode) } : {},
-      session.role === "ADMIN" && params.datasetId
-        ? { datasetId: params.datasetId }
-        : {},
+      session.role === "ADMIN" && params.datasetId ? { datasetId: params.datasetId } : {},
       params.q
         ? {
             OR: [
               { firstName: contains(params.q) },
               { lastName: contains(params.q) },
-              { phone: contains(params.q) },
               { city: contains(params.q) },
               { state: contains(params.q) },
               { zipCode: contains(params.q) },
+              { externalId: contains(params.q) },
             ],
           }
         : {},
@@ -115,10 +119,7 @@ export default async function RecordsPage({
     : [];
 
   return (
-    <DashboardShell
-      title={session.role === "ADMIN" ? "Records" : "Search"}
-      role={session.role}
-    >
+    <DashboardShell title={session.role === "ADMIN" ? "Records" : "Search"} role={session.role}>
       <form className="panel" method="GET" style={{ marginBottom: 16 }}>
         <div
           className="search-grid"
@@ -129,29 +130,13 @@ export default async function RecordsPage({
           }}
         >
           <input name="q" defaultValue={params.q ?? ""} placeholder="Quick search" />
-          <input
-            name="firstName"
-            defaultValue={params.firstName ?? ""}
-            placeholder="First name"
-          />
-          <input
-            name="lastName"
-            defaultValue={params.lastName ?? ""}
-            placeholder="Last name"
-          />
-          <input
-            name="birthYear"
-            defaultValue={params.birthYear ?? ""}
-            placeholder="Birth year"
-          />
+          <input name="firstName" defaultValue={params.firstName ?? ""} placeholder="First name" />
+          <input name="lastName" defaultValue={params.lastName ?? ""} placeholder="Last name" />
+          <input name="birthYear" defaultValue={params.birthYear ?? ""} placeholder="Birth year" />
           <input name="phone" defaultValue={params.phone ?? ""} placeholder="Phone" />
           <input name="city" defaultValue={params.city ?? ""} placeholder="City" />
           <input name="state" defaultValue={params.state ?? ""} placeholder="State" />
-          <input
-            name="zipCode"
-            defaultValue={params.zipCode ?? ""}
-            placeholder="ZIP"
-          />
+          <input name="zipCode" defaultValue={params.zipCode ?? ""} placeholder="ZIP" />
         </div>
 
         <div className="actions" style={{ marginTop: 12 }}>
@@ -184,35 +169,41 @@ export default async function RecordsPage({
         <table>
           <thead>
             <tr>
+              <th>ID</th>
               <th>Name</th>
               <th>Birth year</th>
-              <th>Phone</th>
+              <th>Address</th>
               <th>City/State</th>
               <th>ZIP</th>
+              <th>Phone</th>
+              <th>SSN </th>
               <th>Dataset</th>
             </tr>
           </thead>
           <tbody>
             {!hasSearch ? (
               <tr>
-                <td colSpan={6} className="muted">
+                <td colSpan={9} className="muted">
                   Enter search criteria to find matching records.
                 </td>
               </tr>
             ) : records.length === 0 ? (
               <tr>
-                <td colSpan={6} className="muted">
+                <td colSpan={9} className="muted">
                   No matching results found.
                 </td>
               </tr>
             ) : (
               records.map((r) => (
                 <tr key={r.id}>
-                  <td>{[r.firstName, r.lastName].filter(Boolean).join(" ") || "—"}</td>
+                  <td>{r.externalId ?? "—"}</td>
+                  <td>{[r.firstName, r.middleName, r.lastName].filter(Boolean).join(" ") || "—"}</td>
                   <td>{r.birthYear ?? "—"}</td>
-                  <td>{r.phone ?? "—"}</td>
+                  <td>{r.addressLine1 ?? "—"}</td>
                   <td>{[r.city, r.state].filter(Boolean).join(", ") || "—"}</td>
                   <td>{r.zipCode ?? "—"}</td>
+                  <td>{r.phone ?? "—"}</td>
+                  <td>{r.ssNumber ?? "—"}</td>
                   <td>{r.dataset.name}</td>
                 </tr>
               ))

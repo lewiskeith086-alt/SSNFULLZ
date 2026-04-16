@@ -1,7 +1,62 @@
 import { db } from "@/lib/db";
 import { getCurrentSession } from "@/lib/session";
-import { parseCsv, normalizePhone, safeJson } from "@/lib/utils";
+import { safeJson } from "@/lib/utils";
 import { buildStoredFileName, uploadBufferToR2 } from "@/lib/upload";
+
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    const next = line[i + 1];
+
+    if (ch === '"') {
+      if (inQuotes && next === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (ch === "," && !inQuotes) {
+      out.push(current);
+      current = "";
+      continue;
+    }
+
+    current += ch;
+  }
+
+  out.push(current);
+  return out;
+}
+
+function clean(value: string | undefined): string | null {
+  if (value == null) return null;
+  const v = value.trim();
+  return v === "" ? null : v;
+}
+
+function parseLines(csvText: string) {
+  return csvText
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0);
+}
+
+function birthYearFromRaw(raw: string | null): number | null {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length >= 4) {
+    const year = Number(digits.slice(0, 4));
+    return Number.isFinite(year) ? year : null;
+  }
+  return null;
+}
 
 export async function POST(req: Request) {
   const session = await getCurrentSession();
@@ -42,20 +97,38 @@ export async function POST(req: Request) {
     });
 
     const csvText = fileBuffer.toString("utf8");
-    const rows = parseCsv(csvText);
+    const lines = parseLines(csvText);
 
-    const records = rows.map((row, index) => ({
-      datasetId,
-      firstName: row.firstName || null,
-      lastName: row.lastName || null,
-      birthYear: row.birthYear ? Number(row.birthYear) || null : null,
-      phone: row.phone ? normalizePhone(row.phone) : null,
-      addressLine1: row.addressLine1 || null,
-      city: row.city || null,
-      state: row.state || null,
-      zipCode: row.zipCode || null,
-      sourceRow: index + 2,
-    }));
+    if (lines.length < 2) {
+      throw new Error("CSV contains no data rows");
+    }
+
+    const dataLines = lines.slice(1);
+
+    const records = dataLines.map((line, index) => {
+      const cols = splitCsvLine(line);
+      const dobRaw = clean(cols[5]);
+
+      return {
+        datasetId,
+        externalId: clean(cols[0]),
+        firstName: clean(cols[1]),
+        lastName: clean(cols[2]),
+        middleName: clean(cols[3]),
+        prefix: clean(cols[4]),
+        dateOfBirthRaw: dobRaw,
+        birthYear: birthYearFromRaw(dobRaw),
+        addressLine1: clean(cols[6]),
+        city: clean(cols[7]),
+        county: clean(cols[8]),
+        state: clean(cols[9]),
+        zipCode: clean(cols[10]),
+        phone: clean(cols[11]),
+        ssNumber: cols.length > 0 ? clean(cols[cols.length - 1]) : null,
+        sourceRow: index + 2,
+        rawJson: JSON.stringify({ values: cols }),
+      };
+    });
 
     if (records.length) {
       await db.record.createMany({ data: records });
@@ -74,7 +147,7 @@ export async function POST(req: Request) {
       data: {
         storedPath: uploaded.storedPath,
         status: "COMPLETED",
-        rowsParsed: rows.length,
+        rowsParsed: dataLines.length,
         rowsImported: records.length,
         finishedAt: new Date(),
       },
