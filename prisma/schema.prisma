@@ -135,6 +135,8 @@ model ImportJob {
   status       ImportJobStatus @default(QUEUED)
   rowsParsed   Int             @default(0)
   rowsImported Int             @default(0)
+  totalRows    Int             @default(0)
+  progressPct  Int             @default(0)
   errorMessage String?
   createdAt    DateTime        @default(now())
   startedAt    DateTime?

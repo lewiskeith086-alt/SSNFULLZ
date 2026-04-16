@@ -1,4 +1,4 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 
 function getRequiredEnv(name: string) {
   const value = process.env[name];
@@ -51,4 +51,36 @@ export async function uploadBufferToR2(input: {
     publicUrl,
     storedPath: publicUrl || `r2://${bucket}/${input.key}`,
   };
+}
+
+export function parseStoredPath(storedPath: string) {
+  if (!storedPath.startsWith("r2://")) {
+    throw new Error(`Unsupported stored path: ${storedPath}`);
+  }
+
+  const withoutScheme = storedPath.slice(5);
+  const slashIndex = withoutScheme.indexOf("/");
+  if (slashIndex === -1) throw new Error(`Invalid stored path: ${storedPath}`);
+
+  return {
+    bucket: withoutScheme.slice(0, slashIndex),
+    key: withoutScheme.slice(slashIndex + 1),
+  };
+}
+
+export async function downloadTextFromR2(storedPath: string) {
+  const { bucket, key } = parseStoredPath(storedPath);
+  const client = getR2Client();
+
+  const res = await client.send(
+    new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+    })
+  );
+
+  const body = await res.Body?.transformToString();
+  if (!body) throw new Error("Downloaded file was empty");
+
+  return body;
 }
