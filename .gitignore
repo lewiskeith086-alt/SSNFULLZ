@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# next build
+.next/
+out/
+
+# env files (VERY IMPORTANT)
+.env
+.env.local
+.env.development
+.env.production
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# system files
+.DS_Store
+Thumbs.db
+
+# prisma
+prisma/dev.db
+prisma/dev.db-journal
+
+# uploads / temp
+uploads/
+tmp/
+
+# misc
+*.log

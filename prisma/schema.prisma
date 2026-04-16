@@ -1,0 +1,230 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  USER
+}
+
+enum DatasetStatus {
+  READY
+  PROCESSING
+  ARCHIVED
+}
+
+enum ImportJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  CANCELED
+}
+
+enum PaymentGateway {
+  CRYPTOMUS
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  PAID_OVER
+  FAILED
+  CANCELED
+  REFUNDED
+}
+
+enum TicketStatus {
+  OPEN
+  IN_REVIEW
+  CLOSED
+}
+
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique
+  passwordHash    String
+  fullName        String?
+  role            UserRole  @default(USER)
+  emailVerifiedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  datasets            Dataset[]
+  importJobs          ImportJob[]
+  subscriptions       Subscription[]
+  paymentTransactions PaymentTransaction[]
+  supportTickets      SupportTicket[]
+  newsPosts           NewsPost[]
+
+  @@index([role])
+  @@index([createdAt])
+}
+
+model Dataset {
+  id           String        @id @default(cuid())
+  name         String
+  description  String?
+  status       DatasetStatus @default(READY)
+  uploadedById String
+  rowCount     Int           @default(0)
+  lastImportAt DateTime?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  uploadedBy User        @relation(fields: [uploadedById], references: [id], onDelete: Restrict)
+  records    Record[]
+  importJobs ImportJob[]
+
+  @@index([uploadedById])
+  @@index([createdAt])
+}
+
+model Record {
+  id           String   @id @default(cuid())
+  datasetId    String
+  firstName    String?
+  lastName     String?
+  birthYear    Int?
+  phone        String?
+  addressLine1 String?
+  city         String?
+  state        String?
+  zipCode      String?
+  sourceRow    Int?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  dataset Dataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+
+  @@index([datasetId])
+  @@index([firstName])
+  @@index([lastName])
+  @@index([phone])
+  @@index([city])
+  @@index([state])
+  @@index([createdAt])
+}
+
+model ImportJob {
+  id           String          @id @default(cuid())
+  datasetId    String
+  uploadedById String
+  fileName     String
+  storedPath   String
+  status       ImportJobStatus @default(QUEUED)
+  rowsParsed   Int             @default(0)
+  rowsImported Int             @default(0)
+  errorMessage String?
+  createdAt    DateTime        @default(now())
+  startedAt    DateTime?
+  finishedAt   DateTime?
+
+  dataset    Dataset @relation(fields: [datasetId], references: [id], onDelete: Cascade)
+  uploadedBy User    @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  @@index([datasetId])
+  @@index([uploadedById])
+  @@index([createdAt])
+}
+
+model SubscriptionPlan {
+  id           String   @id @default(cuid())
+  name         String   @unique
+  priceUsd     Int
+  durationDays Int
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  subscriptions       Subscription[]
+  paymentTransactions PaymentTransaction[]
+
+  @@index([isActive])
+  @@index([priceUsd])
+}
+
+model Subscription {
+  id        String             @id @default(cuid())
+  userId    String
+  planId    String
+  status    SubscriptionStatus @default(ACTIVE)
+  startsAt  DateTime
+  endsAt    DateTime
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  user User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([planId])
+  @@index([startsAt])
+  @@index([endsAt])
+}
+
+model PaymentTransaction {
+  id               String         @id @default(cuid())
+  userId           String
+  planId           String
+  gateway          PaymentGateway @default(CRYPTOMUS)
+  status           PaymentStatus  @default(PENDING)
+  amountUsd        Int
+  currency         String         @default("USD")
+  gatewayInvoiceId String?        @unique
+  orderId          String         @unique
+  paymentUrl       String?
+  gatewayPayload   String?
+  paidAt           DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  user User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plan SubscriptionPlan @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([planId])
+  @@index([createdAt])
+}
+
+model SupportTicket {
+  id         String       @id @default(cuid())
+  userId     String
+  subject    String
+  message    String
+  status     TicketStatus @default(OPEN)
+  adminReply String?
+  createdAt  DateTime     @default(now())
+  updatedAt  DateTime     @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+model NewsPost {
+  id            String   @id @default(cuid())
+  title         String
+  body          String
+  isPublished   Boolean  @default(true)
+  publishedById String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  publishedBy User @relation(fields: [publishedById], references: [id], onDelete: Cascade)
+
+  @@index([publishedById])
+  @@index([isPublished])
+  @@index([createdAt])
+}
