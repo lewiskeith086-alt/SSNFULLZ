@@ -1,113 +1,231 @@
-import { PrismaClient } from "@prisma/client"
-import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3"
-import readline from "readline"
+import { db } from "../lib/db";
+import { downloadTextFromR2 } from "../lib/upload";
 
-const prisma = new PrismaClient()
+function splitCsvLine(line: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let inQuotes = false;
 
-const s3 = new S3Client({
-  region: "auto",
-  endpoint: process.env.R2_ENDPOINT!,
-  credentials: {
-    accessKeyId: process.env.R2_ACCESS_KEY!,
-    secretAccessKey: process.env.R2_SECRET_KEY!,
-  },
-})
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    const next = line[i + 1];
 
-async function streamFromR2(key: string) {
-  const res = await s3.send(
-    new GetObjectCommand({
-      Bucket: process.env.R2_BUCKET!,
-      Key: key,
-    })
-  )
+    if (ch === '"') {
+      if (inQuotes && next === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
 
-  return res.Body as any
+    if (ch === "," && !inQuotes) {
+      out.push(current);
+      current = "";
+      continue;
+    }
+
+    current += ch;
+  }
+
+  out.push(current);
+  return out;
 }
 
-async function processDataset(dataset: any) {
-  console.log("Processing dataset:", dataset.id)
+function clean(value: string | undefined): string | null {
+  if (value == null) return null;
+  const v = value.trim();
+  return v === "" ? null : v;
+}
 
-  const stream = await streamFromR2(dataset.r2Key)
+function parseLines(csvText: string) {
+  return csvText
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.length > 0);
+}
 
-  const rl = readline.createInterface({
-    input: stream,
-    crlfDelay: Infinity,
-  })
+function birthYearFromRaw(raw: string | null): number | null {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, "");
+  if (digits.length >= 4) {
+    const year = Number(digits.slice(0, 4));
+    return Number.isFinite(year) ? year : null;
+  }
+  return null;
+}
 
-  let batch: any[] = []
-  let count = 0
+async function processJob(jobId: string) {
+  const job = await db.importJob.findUnique({
+    where: { id: jobId },
+  });
 
-  for await (const line of rl) {
-    if (!line.trim()) continue
+  if (!job) return;
 
-    const parts = line.split(",")
+  await db.importJob.update({
+    where: { id: job.id },
+    data: {
+      status: "PROCESSING",
+      startedAt: new Date(),
+      errorMessage: null,
+    },
+  });
 
-    const record = {
-      firstName: parts[1] || null,
-      lastName: parts[2] || null,
-      middleName: parts[3] || null,
-      prefix: parts[4] || null,
-      dob: parts[5] || null,
-      address: parts[6] || null,
-      city: parts[7] || null,
-      county: parts[8] || null,
-      state: parts[9] || null,
-      zip: parts[10] || null,
-      phone: parts[11] || null,
-      constNumber: parts[parts.length - 1] || null,
-      datasetId: dataset.id,
+  await db.dataset.update({
+    where: { id: job.datasetId },
+    data: {
+      status: "PROCESSING",
+    },
+  });
+
+  try {
+    const csvText = await downloadTextFromR2(job.storedPath);
+    const lines = parseLines(csvText);
+
+    if (lines.length < 2) {
+      throw new Error("CSV contains no data rows");
     }
 
-    batch.push(record)
+    const dataLines = lines.slice(1);
+    const totalRows = dataLines.length;
+    const BATCH_SIZE = 500;
 
-    if (batch.length >= 500) {
-      await prisma.record.createMany({
-        data: batch,
-        skipDuplicates: true,
-      })
+    let batch: Array<Record<string, unknown>> = [];
+    let processed = 0;
+    let inserted = 0;
 
-      count += batch.length
-      console.log("Inserted:", count)
+    for (let index = 0; index < dataLines.length; index++) {
+      const line = dataLines[index];
+      if (!line.trim()) continue;
 
-      batch = []
+      const cols = splitCsvLine(line);
+      const dobRaw = clean(cols[5]);
+
+      batch.push({
+        datasetId: job.datasetId,
+        externalId: clean(cols[0]),
+        firstName: clean(cols[1]),
+        lastName: clean(cols[2]),
+        middleName: clean(cols[3]),
+        prefix: clean(cols[4]),
+        dateOfBirthRaw: dobRaw,
+        birthYear: birthYearFromRaw(dobRaw),
+        addressLine1: clean(cols[6]),
+        city: clean(cols[7]),
+        county: clean(cols[8]),
+        state: clean(cols[9]),
+        zipCode: clean(cols[10]),
+        phone: clean(cols[11]),
+        ssNumber: cols.length > 0 ? clean(cols[cols.length - 1]) : null,
+        sourceRow: index + 2,
+        rawJson: JSON.stringify({ values: cols }),
+      });
+
+      processed++;
+
+      if (batch.length >= BATCH_SIZE) {
+        await db.record.createMany({
+          data: batch as any,
+        });
+
+        inserted += batch.length;
+        batch = [];
+
+        await db.importJob.update({
+          where: { id: job.id },
+          data: {
+            totalRows,
+            rowsParsed: processed,
+            rowsImported: inserted,
+            progressPct: Math.floor((processed / totalRows) * 100),
+          },
+        });
+
+        console.log(`Job ${job.id}: ${inserted}/${totalRows}`);
+      }
     }
+
+    if (batch.length > 0) {
+      await db.record.createMany({
+        data: batch as any,
+      });
+
+      inserted += batch.length;
+    }
+
+    await db.dataset.update({
+      where: { id: job.datasetId },
+      data: {
+        rowCount: { increment: inserted },
+        lastImportAt: new Date(),
+        status: "READY",
+      },
+    });
+
+    await db.importJob.update({
+      where: { id: job.id },
+      data: {
+        totalRows,
+        rowsParsed: processed,
+        rowsImported: inserted,
+        progressPct: 100,
+        status: "COMPLETED",
+        finishedAt: new Date(),
+      },
+    });
+
+    console.log(`Job ${job.id} completed: ${inserted}/${totalRows}`);
+  } catch (e: any) {
+    await db.dataset.update({
+      where: { id: job.datasetId },
+      data: {
+        status: "READY",
+      },
+    });
+
+    await db.importJob.update({
+      where: { id: job.id },
+      data: {
+        status: "FAILED",
+        errorMessage: String(e?.message || "Unknown import error"),
+        finishedAt: new Date(),
+      },
+    });
+
+    console.error(`Job ${job.id} failed:`, e);
+  }
+}
+
+async function poll() {
+  const job = await db.importJob.findFirst({
+    where: { status: "QUEUED" },
+    orderBy: { createdAt: "asc" },
+  });
+
+  if (!job) {
+    console.log("No queued jobs");
+    return;
   }
 
-  if (batch.length > 0) {
-    await prisma.record.createMany({
-      data: batch,
-      skipDuplicates: true,
-    })
-
-    count += batch.length
-  }
-
-  console.log("Finished:", count)
-
-  await prisma.dataset.update({
-    where: { id: dataset.id },
-    data: { status: "completed" },
-  })
+  await processJob(job.id);
 }
 
 async function main() {
-  console.log("Import worker started")
+  console.log("Import worker started");
 
-  const dataset = await prisma.dataset.findFirst({
-    where: { status: "pending" },
-  })
+  while (true) {
+    try {
+      await poll();
+    } catch (e) {
+      console.error("Worker poll error:", e);
+    }
 
-  if (!dataset) {
-    console.log("No pending datasets")
-    return
+    await new Promise((resolve) => setTimeout(resolve, 5000));
   }
-
-  await prisma.dataset.update({
-    where: { id: dataset.id },
-    data: { status: "processing" },
-  })
-
-  await processDataset(dataset)
 }
 
-main()
+main().catch((e) => {
+  console.error("Worker fatal error:", e);
+  process.exit(1);
+});
