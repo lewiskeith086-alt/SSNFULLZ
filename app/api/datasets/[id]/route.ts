@@ -1,10 +1,11 @@
 import { db } from "@/lib/db";
 import { getCurrentSession } from "@/lib/session";
 import { safeJson } from "@/lib/utils";
+import { NextRequest } from "next/server";
 
 export async function DELETE(
-  _req: Request,
-  { params }: { params: { id: string } }
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> }
 ) {
   const session = await getCurrentSession();
 
@@ -12,7 +13,7 @@ export async function DELETE(
     return safeJson({ error: "Admin access required" }, { status: 403 });
   }
 
-  const { id } = params;
+  const { id } = await context.params;
 
   const dataset = await db.dataset.findUnique({
     where: { id },
