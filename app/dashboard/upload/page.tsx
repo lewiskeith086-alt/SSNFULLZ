@@ -149,7 +149,14 @@ export default function UploadPage() {
         setResumeAvailable(true);
       }
 
-      const uploadedPartNumbers = new Set((resume?.parts || []).map((p) => p.PartNumber));
+      if (!resume) {
+        throw new Error("Upload session failed to initialize");
+      }
+
+      const activeResume = resume;
+      const uploadedPartNumbers = new Set(
+        activeResume.parts.map((p) => p.PartNumber)
+      );
 
       for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
         const start = (partNumber - 1) * PART_SIZE;
@@ -160,16 +167,20 @@ export default function UploadPage() {
         }
 
         const chunk = file.slice(start, end);
-        const url = await signPart(resume.key, resume.uploadId, partNumber);
+        const url = await signPart(
+          activeResume.key,
+          activeResume.uploadId,
+          partNumber
+        );
         const etag = await uploadPart(url, chunk);
 
-        resume.parts.push({ ETag: etag, PartNumber: partNumber });
-        resume.uploadedBytes += chunk.size;
-        saveResumeState(resume);
+        activeResume.parts.push({ ETag: etag, PartNumber: partNumber });
+        activeResume.uploadedBytes += chunk.size;
+        saveResumeState(activeResume);
 
         const pct = Math.min(
           100,
-          Math.round((resume.uploadedBytes / file.size) * 100)
+          Math.round((activeResume.uploadedBytes / file.size) * 100)
         );
         setUploadPct(pct);
       }
@@ -178,9 +189,9 @@ export default function UploadPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          key: resume.key,
-          uploadId: resume.uploadId,
-          parts: resume.parts,
+          key: activeResume.key,
+          uploadId: activeResume.uploadId,
+          parts: activeResume.parts,
         }),
       });
 
@@ -191,7 +202,7 @@ export default function UploadPage() {
 
       const form = new FormData();
       form.append("datasetId", datasetId);
-      form.append("storedPath", resume.storedPath);
+      form.append("storedPath", activeResume.storedPath);
       form.append("fileName", file.name);
 
       const queueRes = await fetch("/api/datasets/upload", {
@@ -205,7 +216,7 @@ export default function UploadPage() {
       }
 
       setMessage("Upload complete. File queued for background processing.");
-      setStoredPath(resume.storedPath);
+      setStoredPath(activeResume.storedPath);
       setUploadPct(100);
       clearResumeState();
       setResumeAvailable(false);
