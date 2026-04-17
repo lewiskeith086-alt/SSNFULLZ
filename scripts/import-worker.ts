@@ -1,5 +1,6 @@
 import { db } from "../lib/db";
-import { downloadTextFromR2 } from "../lib/upload";
+import { downloadStreamFromR2 } from "../lib/upload";
+import readline from "readline";
 
 function splitCsvLine(line: string): string[] {
   const out: string[] = [];
@@ -39,13 +40,6 @@ function clean(value: string | undefined): string | null {
   return v === "" ? null : v;
 }
 
-function parseLines(csvText: string) {
-  return csvText
-    .split(/\r?\n/)
-    .map((line) => line.trimEnd())
-    .filter((line) => line.length > 0);
-}
-
 function birthYearFromRaw(raw: string | null): number | null {
   if (!raw) return null;
   const digits = raw.replace(/\D/g, "");
@@ -69,35 +63,39 @@ async function processJob(jobId: string) {
       status: "PROCESSING",
       startedAt: new Date(),
       errorMessage: null,
+      rowsParsed: 0,
+      rowsImported: 0,
+      progressPct: 0,
     },
   });
 
   await db.dataset.update({
     where: { id: job.datasetId },
-    data: {
-      status: "PROCESSING",
-    },
+    data: { status: "PROCESSING" },
   });
 
   try {
-    const csvText = await downloadTextFromR2(job.storedPath);
-    const lines = parseLines(csvText);
+    const stream = await downloadStreamFromR2(job.storedPath);
 
-    if (lines.length < 2) {
-      throw new Error("CSV contains no data rows");
-    }
+    const rl = readline.createInterface({
+      input: stream,
+      crlfDelay: Infinity,
+    });
 
-    const dataLines = lines.slice(1);
-    const totalRows = dataLines.length;
-    const BATCH_SIZE = 500;
-
+    const BATCH_SIZE = 200;
     let batch: Array<Record<string, unknown>> = [];
     let processed = 0;
     let inserted = 0;
+    let totalRows = 0;
+    let isHeader = true;
 
-    for (let index = 0; index < dataLines.length; index++) {
-      const line = dataLines[index];
+    for await (const line of rl) {
       if (!line.trim()) continue;
+
+      if (isHeader) {
+        isHeader = false;
+        continue;
+      }
 
       const cols = splitCsvLine(line);
       const dobRaw = clean(cols[5]);
@@ -118,11 +116,12 @@ async function processJob(jobId: string) {
         zipCode: clean(cols[10]),
         phone: clean(cols[11]),
         ssNumber: cols.length > 0 ? clean(cols[cols.length - 1]) : null,
-        sourceRow: index + 2,
-        rawJson: JSON.stringify({ values: cols }),
+        sourceRow: processed + 2,
+        rawJson: null,
       });
 
       processed++;
+      totalRows++;
 
       if (batch.length >= BATCH_SIZE) {
         await db.record.createMany({
@@ -135,14 +134,12 @@ async function processJob(jobId: string) {
         await db.importJob.update({
           where: { id: job.id },
           data: {
-            totalRows,
             rowsParsed: processed,
             rowsImported: inserted,
-            progressPct: Math.floor((processed / totalRows) * 100),
           },
         });
 
-        console.log(`Job ${job.id}: ${inserted}/${totalRows}`);
+        console.log(`Job ${job.id}: ${inserted} rows imported`);
       }
     }
 
@@ -150,7 +147,6 @@ async function processJob(jobId: string) {
       await db.record.createMany({
         data: batch as any,
       });
-
       inserted += batch.length;
     }
 
@@ -175,13 +171,11 @@ async function processJob(jobId: string) {
       },
     });
 
-    console.log(`Job ${job.id} completed: ${inserted}/${totalRows}`);
+    console.log(`Job ${job.id} completed: ${inserted} rows`);
   } catch (e: any) {
     await db.dataset.update({
       where: { id: job.datasetId },
-      data: {
-        status: "READY",
-      },
+      data: { status: "READY" },
     });
 
     await db.importJob.update({
@@ -213,6 +207,20 @@ async function poll() {
 
 async function main() {
   console.log("Import worker started");
+
+  await db.importJob.updateMany({
+    where: { status: "PROCESSING" },
+    data: {
+      status: "QUEUED",
+      startedAt: null,
+      errorMessage: "Recovered after worker restart",
+    },
+  });
+
+  await db.dataset.updateMany({
+    where: { status: "PROCESSING" },
+    data: { status: "READY" },
+  });
 
   while (true) {
     try {
